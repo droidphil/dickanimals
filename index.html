@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AT · Show &amp; Tell — Appalachian Trail Photo Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cardo:ital,wght@0,400;0,700;1,400&family=Montserrat:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet.markercluster/MarkerCluster.css">
+<link rel="stylesheet" href="vendor/leaflet.markercluster/MarkerCluster.Default.css">
+<link rel="stylesheet" href="style.css?v=3">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%231e4d2b'/%3E%3Cpath d='M15 70 L85 70' stroke='%23f5f2ea' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand" title="Appalachian Trail · Photo Journal">
+    <span class="blaze" aria-hidden="true"></span>
+    <div class="brand-text">
+      <h1>AT · <em>Show &amp; Tell</em></h1>
+      <p id="brand-sub">Appalachian Trail photo journal</p>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-view="map" class="tab active">Trail Map</button>
+    <button data-view="gallery" class="tab">Gallery<span id="galleryCount" class="badge"></span></button>
+    <button data-view="screens" class="tab">Screenshots<span id="screenCount" class="badge"></span></button>
+  </nav>
+  <div class="top-actions">
+    <button id="btnRandom" class="ghost" title="Jump to a random photo">&#127922; Random</button>
+    <button id="btnSettings" class="ghost" title="Hike settings & data">&#9881; Settings</button>
+    <button id="btnExport" class="ghost" title="Download your check-ins, captions & fixes as JSON">&#8595; Export</button>
+    <label class="ghost file" title="Import check-ins, captions & fixes from JSON">&#8593; Import<input id="importFile" type="file" accept="application/json" hidden></label>
+  </div>
+</header>
+
+<main id="view-map" class="view active">
+  <aside id="rail" class="rail">
+    <div class="rail-head">
+      <h2>FarOut&nbsp;-style check-ins</h2>
+      <button id="btnNewCheckin" class="primary small">+ Add check-in</button>
+    </div>
+    <p class="rail-hint">Tap anywhere on the trail to create a check-in (like FarOut) — name it, date it, and attach the photos you took there. Photos you don't pin are auto-placed by date along the route.</p>
+    <ul id="checkinList" class="checkin-list"></ul>
+    <div class="rail-foot">
+      <div class="stat"><b id="statPhotos">…</b><span>photos</span></div>
+      <div class="stat"><b id="statPlaced">…</b><span>placed on trail</span></div>
+      <div class="stat"><b id="statCheckins">…</b><span>check-ins</span></div>
+      <div class="stat"><b id="statPace">…</b><span>avg mi/day</span></div>
+    </div>
+  </aside>
+  <div id="map"></div>
+  <div id="legend" class="legend">
+    <div><span class="dot checkin-dot"></span> Check-in (numbered)</div>
+    <div><span class="dot photo-dot"></span> Photo — auto-placed by date</div>
+    <div><span class="line legend-line"></span> Trail (0 → 2190.4 mi)</div>
+    <button id="btnFit" class="map-btn">&#9678; Whole trail</button>
+    <button id="btnTogglePhotos" class="map-btn">Hide photo dots</button>
+    <button id="btnListRail" class="map-btn">&#10005; Hide check-ins</button>
+  </div>
+  <div id="tsMap" class="tsbar" role="group" aria-label="Scrub through your hike by date"></div>
+</main>
+
+<section id="view-gallery" class="view">
+  <div class="toolbar">
+    <div class="tool-group">
+      <input id="gallerySearch" type="search" placeholder="Search photo, note, check-in…">
+      <select id="galleryMonth"><option value="">All months</option></select>
+      <select id="gallerySort">
+        <option value="dateAsc">Date &#8593;</option>
+        <option value="dateDesc">Date &#8595;</option>
+        <option value="mileAsc">Trail mile &#8593;</option>
+        <option value="mileDesc">Trail mile &#8595;</option>
+      </select>
+    </div>
+    <label class="check"><input id="galleryPlacedOnly" type="checkbox"> placed on trail only</label>
+  </div>
+  <div id="galScroll" class="scroll-area">
+    <div id="galleryGrid" class="grid"></div>
+    <p id="galleryEmpty" class="empty" hidden>No photos match. <button class="link" id="galleryReset">Reset filters</button></p>
+  </div>
+  <div id="tsGal" class="tsbar" role="group" aria-label="Scrub through your hike by date"></div>
+</section>
+
+<section id="view-screens" class="view">
+  <div class="toolbar">
+    <p class="hint-inline">Phone screenshots (<span id="screenCount2"></span>) — kept off the trail map. The camera roll lost its GPS data, so screenshots have no location either; sort by what they do have.</p>
+    <div class="tool-group">
+      <select id="screenSort">
+        <option value="dateAsc">Date &#8593;</option>
+        <option value="dateDesc">Date &#8595;</option>
+        <option value="nameAsc">Name A&#8594;Z</option>
+        <option value="nameDesc">Name Z&#8594;A</option>
+      </select>
+    </div>
+  </div>
+  <div id="screenGrid" class="grid small"></div>
+</section>
+
+<section id="view-settings" class="view">
+  <div class="settings-panel">
+    <h2>Hike settings &amp; calibration</h2>
+    <p class="settings-note">No GPS survived in the files, so the map estimates each photo's mile from its date along a northbound hike between the dates below. Fix any photo by opening it and entering an exact mile, or add calibration anchors here (check-ins with dates that you mark as anchors) to bend the date&#8594;mile curve to the pace you actually hiked.</p>
+    <div class="form-grid">
+      <label>Start date <input id="setStartDate" type="date"></label>
+      <label>Start point / mile <input id="setStartName" type="text"></label>
+      <label>End date <input id="setEndDate" type="date"></label>
+      <label>End point / mile <input id="setEndName" type="text"></label>
+      <label>Official trail length (mi) <input id="setTotalMiles" type="number" step="0.1"></label>
+    </div>
+    <div class="actions">
+      <button id="btnSaveSettings" class="primary">Save settings</button>
+      <button id="btnResetData" class="danger">Reset all my check-ins &amp; fixes</button>
+    </div>
+    <details class="about">
+      <summary>About this site</summary>
+      <p>Built like <a href="https://www.pic2map.com" target="_blank" rel="noopener">Pic2Map</a> — an EXIF photo-location viewer — but for your Appalachian Trail collection. Pic2Map reads GPS coordinates embedded in photos; these files were stripped of GPS on the way out of the phone (a OnePlus 12 shot everything, Mar 3 – Sep 30, 2024), so location here is reconstructed from timestamps and your FarOut-style check-ins. Trail line: Appalachian Trail Conservancy GPS survey centerline (via <a href="https://github.com/jalbertbowden/appalachian-trail-data" target="_blank" rel="noopener">appalachian-trail-data</a>), stitched locally. Map tiles: OpenStreetMap. Everything runs locally; your check-ins, captions and mile fixes live in this browser (export them with &#8595; Export).</p>
+    </details>
+  </div>
+</section>
+
+<!-- floating previews -->
+<div id="hoverZoom" class="hover-zoom" hidden aria-hidden="true"></div>
+<div id="tsPreview" class="ts-preview" hidden aria-hidden="true"></div>
+
+<!-- Photo / detail drawer -->
+<div id="drawer" class="drawer" hidden aria-hidden="true">
+  <div class="drawer-backdrop" data-close-drawer></div>
+  <aside class="drawer-panel">
+    <button class="drawer-close" data-close-drawer aria-label="Close">&times;</button>
+    <div id="drawerBody"></div>
+  </aside>
+</div>
+
+<!-- Check-in editor modal -->
+<div id="modal" class="modal" hidden aria-hidden="true">
+  <div class="modal-backdrop" data-close-modal></div>
+  <div class="modal-card">
+    <button class="drawer-close" data-close-modal aria-label="Close">&times;</button>
+    <h2 id="modalTitle">New check-in</h2>
+    <p id="modalSub" class="muted"></p>
+    <div class="form-grid">
+      <label>Name <input id="ciName" type="text" placeholder="e.g. McAfee Knob overlook"></label>
+      <label>Trail mile <input id="ciMile" type="number" step="0.1" min="0"></label>
+      <label>Date (optional) <input id="ciDate" type="date"></label>
+    </div>
+    <label class="block">Note / story <textarea id="ciNote" rows="2" placeholder="Show &amp; tell what happened here…"></textarea></label>
+    <label class="check"><input id="ciAnchor" type="checkbox"> Use this check-in to calibrate date&#8594;mile estimates</label>
+    <h3>Photos at this spot</h3>
+    <p class="muted small" id="ciPickHint">Suggested from the date/mile estimate — tick the ones taken here.</p>
+    <div class="pick-actions">
+      <button type="button" id="ciSelNear" class="ghost small">Auto-tick nearest 10</button>
+      <button type="button" id="ciSelNone" class="ghost small">Clear</button>
+    </div>
+    <div id="ciPhotoGrid" class="pick-grid"></div>
+    <div class="actions">
+      <span id="ciCounter" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="ciDelete" class="danger" hidden>Delete</button>
+      <button id="ciSave" class="primary">Save check-in</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<footer id="foot">  <span>409 photos · 5 screenshots · Mar 3 – Sep 30, 2024</span>
+  <span>Photos © their author · Trail line: ATC GPS survey data · Map tiles © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</span>
+</footer>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
+<script src="app.js?v=3"></script>
+</body>
+</html>
