@@ -8,14 +8,47 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const qattr = (s) => JSON.stringify(String(s)).replace(/"/g, '&quot;');
+/** Bind an event only if the element exists — missing/mismatched markup must never break boot. */
+function on(sel, ev, fn) {
+  const el = typeof sel === 'string' ? $(sel) : sel;
+  if (!el) { console.warn('[at] no element for ' + sel + ' (skipped ' + ev + ')'); return null; }
+  el.addEventListener(ev, fn);
+  return el;
+}
+/** Run a boot step without letting it take the whole app down. */
+function safe(label, fn) {
+  try { return fn(); } catch (e) { console.error('[at] ' + label + ' failed: ' + (e && e.message)); return null; }
+}
+
+/* thumbnails live in per-state folders: thumbs/<size>/<State folder>/<file> */
+const SCREEN_THUMB_FOLDER = '_screenshots';
+const UNPLACED_THUMB_FOLDER = '_unplaced';
+const safeFolderName = (s) => String(s).replace(/&/g, 'and').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim();
+function thumbFolderOf(rec) {
+  if (!rec) return UNPLACED_THUMB_FOLDER;
+  if (rec.kind === 'screenshot') return SCREEN_THUMB_FOLDER;
+  if (rec.folder) return rec.folder;
+  const mp = mileForPhoto(rec);
+  return mp ? safeFolderName(stateNameOf(mp.mile)) : UNPLACED_THUMB_FOLDER;
+}
+/** thumbUrl(photoRecord, 480|1600) or thumbUrl('file.jpg', size) for lookups by id */
+function thumbUrl(recOrId, size) {
+  let rec = recOrId;
+  if (typeof recOrId === 'string') rec = (state.photoById && state.photoById[recOrId]) || (state.screenById && state.screenById[recOrId]) || null;
+  const folder = thumbFolderOf(rec);
+  const id = typeof recOrId === 'string' ? recOrId : recOrId.id;
+  return `thumbs/${size}/${encodeURIComponent(folder)}/${encodeURIComponent(id)}`;
+}
 
 const state = {
   photos: [], screenshots: [], route: null,
   hike: null,
-  checkins: [], overrides: {}, captions: {},
+  checkins: [], overrides: {}, comments: {},
   photoLayer: null, checkinLayer: null, trail: null, map: null, draftLatLng: null,
   checkinBeingEdited: null, modalPhotoSelection: new Set(),
   view: 'map', stateCuts: [], photoMarkerById: {}, scrubMarker: null,
+  camps: [], campLogTotal: 2197.4, campLayer: null,
+  photoById: {}, screenById: {},
 };
 
 /* ---------------- persistence ---------------- */
@@ -25,38 +58,44 @@ function save() {
       hike: state.hike,
       checkins: state.checkins,
       overrides: state.overrides,
-      captions: state.captions,
+      comments: state.comments,
     }));
   } catch (e) { console.warn('save failed', e); }
 }
 function loadStore() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch { return null; }
 }
-function exportData() {
-  const blob = new Blob([JSON.stringify({
-    app: 'AT Show & Tell photo journal', exportedAt: new Date().toISOString(),
-    hike: state.hike, checkins: state.checkins, overrides: state.overrides, captions: state.captions,
-  }, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'at-show-and-tell-data.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast('Data exported');
+/* comments replace the old single "caption" field */
+function commentsFor(id) { const c = state.comments[id]; return Array.isArray(c) ? c : []; }
+function commentText(id) { return commentsFor(id).map((c) => c.t).join(' · '); }
+function addComment(id, text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (!Array.isArray(state.comments[id])) state.comments[id] = [];
+  state.comments[id].push({ t, at: new Date().toISOString() });
+  save(); return true;
 }
-function importData(file) {
-  const rd = new FileReader();
-  rd.onload = () => {
-    try {
-      const j = JSON.parse(rd.result);
-      if (j.hike) state.hike = { ...state.hike, ...j.hike };
-      state.checkins = Array.isArray(j.checkins) ? j.checkins : [];
-      state.overrides = j.overrides || {};
-      state.captions = j.captions || {};
-      save(); location.reload();
-    } catch (e) { toast('Could not read that file'); }
-  };
-  rd.readAsText(file);
+function removeComment(id, idx) {
+  const list = state.comments[id];
+  if (!Array.isArray(list)) return;
+  list.splice(idx, 1);
+  if (!list.length) delete state.comments[id];
+  save();
+}
+function commentsHTML(id) {
+  const list = commentsFor(id);
+  if (!list.length) return '<li class="cmt-empty">No comments yet — say something.</li>';
+  return list.map((c, i) => `<li class="cmt">
+      <p class="cmt-text">${esc(c.t)}</p>
+      <div class="cmt-meta"><span>${c.at ? fmtDate(c.at) : ''}</span><button class="cmt-del" onclick="deleteComment(${qattr(id)},${i})">remove</button></div>
+    </li>`).join('');
+}
+function deleteComment(id, idx) {
+  removeComment(id, idx);
+  const ul = document.querySelector('#dtComments');
+  if (ul) ul.innerHTML = commentsHTML(id);
+  renderGallery(); renderTrailMarkers();
+  toast('Comment removed');
 }
 
 /* ---------------- date / mile math ---------------- */
@@ -164,13 +203,19 @@ function latLngToMi(ll) {
 /* ---------------- boot ---------------- */
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const [ph, rt] = await Promise.all([
+    const [ph, rt, cp] = await Promise.all([
       fetch('data/photos.json').then((r) => r.json()),
       fetch('data/at-route.json').then((r) => r.json()),
+      fetch('data/camps.json').then((r) => r.json()).catch(() => ({ camps: [] })),
     ]);
     state.photos = ph.photos; state.screenshots = ph.screenshots;
     state.route = decimate(rt);
     state.stateCuts = rt.stateCuts || DEFAULT_STATE_CUTS;
+    state.camps = cp.camps || [];
+    state.campLogTotal = cp.logTotal || 2197.4;
+    state.photoById = {}; state.screenById = {};
+    for (const p of state.photos) state.photoById[p.id] = p;
+    for (const s of state.screenshots) state.screenById[s.id] = s;
     $('#galleryCount').textContent = ph.counts.trailPhotos;
     $('#screenCount').textContent = ph.counts.screenshots;
     $('#screenCount2').textContent = ph.counts.screenshots;
@@ -187,20 +232,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     state.checkins = (st && st.checkins) || [];
     state.overrides = (st && st.overrides) || {};
-    state.captions = (st && st.captions) || {};
+    state.comments = (st && st.comments) || {};
+    // migrate any old single-caption text into the new comment list
+    if (st && st.captions && typeof st.captions === 'object') {
+      let migrated = false;
+      for (const [id, t] of Object.entries(st.captions)) {
+        if (!t) continue;
+        if (!Array.isArray(state.comments[id])) state.comments[id] = [];
+        if (!state.comments[id].some((c) => c.t === t)) { state.comments[id].push({ t, at: null }); migrated = true; }
+      }
+      if (migrated) save();
+    }
 
-    initUI();
-    initMap();
-    initTimelineBars();
-    renderStats();
-    renderCheckinList();
-    renderGallery();
-    renderScreens();
-    fillSettings();
+    // each step is isolated: one broken/missing element can no longer kill the whole page
+    safe('initUI', initUI);
+    safe('initMap', initMap);
+    safe('initTimelineBars', initTimelineBars);
+    safe('renderStats', renderStats);
+    safe('renderCheckinList', renderCheckinList);
+    safe('renderGallery', renderGallery);
+    safe('renderScreens', renderScreens);
     state.view = 'map';
+    if (!state.map) {
+      const host = $('#view-map');
+      if (host) host.innerHTML = '<div class="spinner-wrap"><div>Map failed to start — check the browser console for details.</div></div>';
+    }
   } catch (e) {
     console.error(e);
-    $('#view-map').outerHTML = `<div class="spinner-wrap"><div>Could not load data: ${esc(e.message)}<br>Start it with <code>node server.js</code> from the photo-map-site folder.</div></div>`;
+    const host = $('#view-map');
+    const msg = e && e.message ? esc(e.message) : 'unknown error';
+    const hint = /fetch|Failed to load|NetworkError/i.test(String(e && e.message))
+      ? 'The data files could not be fetched. On GitHub Pages, publish the <b>contents of the <code>site/</code> folder</b> as the site root (with <code>data/</code>, <code>thumbs/</code> and <code>vendor/</code> committed).<br>Locally, start it with <code>node server.js</code> in the photo-map-site folder.'
+      : 'Open the browser console (F12) for the full stack trace.';
+    if (host) host.innerHTML = `<div class="spinner-wrap"><div>Could not load data: ${msg}<br>${hint}</div></div>`;
   }
 });
 
@@ -213,36 +277,55 @@ function toast(msg, ms = 2600) {
 }
 function initUI() {
   $$('.tab').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
-  $('#btnRandom').addEventListener('click', () => { const p = state.photos[Math.floor(Math.random() * state.photos.length)]; openDetail(p.id); });
-  $('#btnExport').addEventListener('click', exportData);
-  $('#importFile').addEventListener('change', (e) => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ''; });
-  $('#btnSettings').addEventListener('click', () => switchView('settings'));
-  $('#btnSaveSettings').addEventListener('click', saveSettings);
-  $('#btnResetData').addEventListener('click', () => { if (confirm('Delete all check-ins, captions and mile fixes from this browser?')) { localStorage.removeItem(STORE_KEY); location.reload(); } });
-  $('#btnNewCheckin').addEventListener('click', () => openCheckinEditor(null, null));
-  $('#ciSave').addEventListener('click', saveCheckin);
-  $('#ciDelete').addEventListener('click', () => deleteCheckin(state.checkinBeingEdited));
-  buildMonthOptions();
-  $('#galleryReset').addEventListener('click', resetGalleryFilters);
-  $('#gallerySearch').addEventListener('input', renderGallery);
-  $('#galleryMonth').addEventListener('change', renderGallery);
-  $('#gallerySort').addEventListener('change', renderGallery);
-  $('#galleryPlacedOnly').addEventListener('change', renderGallery);
-  $('#screenSort').addEventListener('change', renderScreens);
-  $('#btnFit').addEventListener('click', fitTrail);
-  $('#btnTogglePhotos').addEventListener('click', togglePhotos);
+  on('#btnRandom', 'click', () => { const p = state.photos[Math.floor(Math.random() * state.photos.length)]; openDetail(p.id); });
+  on('#ciSave', 'click', saveCheckin);
+  on('#ciDelete', 'click', () => deleteCheckin(state.checkinBeingEdited));
+  safe('buildMonthOptions', buildMonthOptions);
+  on('#galleryReset', 'click', resetGalleryFilters);
+  on('#gallerySearch', 'input', renderGallery);
+  on('#galleryMonth', 'change', renderGallery);
+  on('#gallerySort', 'change', renderGallery);
+  on('#galleryPlacedOnly', 'change', renderGallery);
+  on('#screenSort', 'change', renderScreens);
+  on('#btnFit', 'click', fitTrail);
+  on('#btnTogglePhotos', 'click', togglePhotos);
+  on('#btnToggleCamps', 'click', toggleCamps);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); closeModal(); } });
   $$('[data-close-drawer]').forEach((el) => el.addEventListener('click', closeDrawer));
   $$('[data-close-modal]').forEach((el) => el.addEventListener('click', closeModal));
   // mobile rail opener
-  $('#btnListRail').addEventListener('click', toggleRail);
+  on('#btnListRail', 'click', toggleRail);
+  initLegendToggle();
+}
+/* collapsible map legend (the little arrow closes the panel) */
+const LEGEND_KEY = 'atj.legend.collapsed';
+function applyLegendState(collapsed) {
+  const l = $('#legend'), btn = $('#legendToggle');
+  if (!l || !btn) return;
+  l.classList.toggle('collapsed', collapsed);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  btn.title = collapsed ? 'Expand the legend' : 'Collapse the legend';
+}
+function initLegendToggle() {
+  const btn = $('#legendToggle');
+  if (!btn) return;
+  let stored = null;
+  try { stored = localStorage.getItem(LEGEND_KEY); } catch (e) { /* private mode */ }
+  applyLegendState(stored === null ? window.innerWidth <= 900 : stored === '1');
+  btn.addEventListener('click', () => {
+    const collapsed = !$('#legend').classList.contains('collapsed');
+    applyLegendState(collapsed);
+    try { localStorage.setItem(LEGEND_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+  });
 }
 function toggleRail() {
   const rail = $('#rail');
+  if (!rail) return;
   if (window.innerWidth <= 900) rail.classList.toggle('open');
   else {
     const hidden = document.body.classList.toggle('rail-hidden');
-    $('#btnListRail').textContent = hidden ? '☰ Show check-ins' : '✕ Hide check-ins';
+    const btn = $('#btnListRail');
+    if (btn) btn.textContent = hidden ? '☰ Show check-ins' : '✕ Hide check-ins';
   }
 }
 function switchView(name) {
@@ -259,6 +342,9 @@ function switchView(name) {
 function initMap() {
   const map = L.map('map', { zoomControl: true, attributionControl: true });
   state.map = map;
+  // the legend lives inside the map container now — keep its clicks/scrolls off the map
+  const legendEl = document.getElementById('legend');
+  if (legendEl) { L.DomEvent.disableClickPropagation(legendEl); L.DomEvent.disableScrollPropagation(legendEl); }
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   });
@@ -268,8 +354,8 @@ function initMap() {
   const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19, attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
   });
-  osm.addTo(map);
-  L.control.layers({ 'Trail map': osm, 'Topographic': topo, 'Satellite': sat }, null, { position: 'topright' }).addTo(map);
+  topo.addTo(map); // topographic is the default base layer
+  L.control.layers({ 'Topographic': topo, 'Streets (OSM)': osm, 'Satellite': sat }, null, { position: 'topright' }).addTo(map);
 
   // the trail
   const r = state.route;
@@ -287,9 +373,9 @@ function initMap() {
   for (let m = 100; m < Number(state.hike.totalMiles); m += 100) miLabel(m);
 
   map.on('click', (ev) => {
-    // ignore clicks on markers, popups, controls and the trail's own popups
+    // ignore clicks on the legend, markers, popups and controls
     const t = ev.originalEvent && ev.originalEvent.target;
-    if (t && t.closest && t.closest('.leaflet-marker-icon,.leaflet-interactive,.leaflet-popup,.leaflet-control,.leaflet-bar,.mi-label')) return;
+    if (t && t.closest && t.closest('#legend,.leaflet-marker-icon,.leaflet-interactive,.leaflet-popup,.leaflet-control,.leaflet-bar,.mi-label')) return;
     const mi = latLngToMi(ev.latlng);
     // only treat clicks very close to the trail as check-in placement
     const pt = miToLatLng(mi);
@@ -303,9 +389,18 @@ function initMap() {
     maxClusterRadius: 44, showCoverageOnHover: false, spiderfyOnMaxZoom: true,
     iconCreateFunction: (cl) => L.divIcon({ html: `<div class="cc-badge">${cl.getChildCount()}</div>`, className: '', iconSize: [30, 30] }),
   }).addTo(map);
+  // campfire nights from the caitlog — clustered, campfire-styled badges
+  state.campLayer = L.markerClusterGroup({
+    maxClusterRadius: 34, showCoverageOnHover: false, spiderfyOnMaxZoom: true,
+    iconCreateFunction: (cl) => L.divIcon({
+      html: `<div class="cf-badge">${campfireSVG(12)}<span>${cl.getChildCount()}</span></div>`,
+      className: '', iconSize: [34, 24],
+    }),
+  }).addTo(map);
 
   fitTrail();
   renderTrailMarkers();
+  renderCamps();
 }
 function fitTrail() {
   if (!state.map) return;
@@ -350,9 +445,9 @@ function renderTrailMarkers() {
 }
 function photoPopup(p, mp) {
   const ci = checkinForPhoto(p.id);
-  const cap = state.captions[p.id] || '';
+  const cap = commentText(p.id);
   return `<div style="width:238px">
-    <img class="lp-thumb" loading="lazy" src="thumbs/480/${encodeURIComponent(p.id)}" alt="">
+    <img class="lp-thumb" loading="lazy" src="${thumbUrl(p, 480)}" alt="">
     <p class="lp-name">${fmtDate(p.date)}</p>
     <p><span class="lp-mile">mile ${fmtMi(mp.mile)}</span> ${mp.fixed ? '· pinned' : mp.auto ? '· auto' : ''}${ci ? `<span class="chip">${esc(ci.name)}</span>` : ''}</p>
     ${p.summary ? `<p style="font-size:11.5px;color:var(--ink-soft)">${esc(p.summary)}</p>` : ''}
@@ -361,7 +456,7 @@ function photoPopup(p, mp) {
   </div>`;
 }
 function checkinPopup(c, n) {
-  const thumbs = c.photoIds.slice(0, 4).map((id) => `<img src="thumbs/480/${encodeURIComponent(id)}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;margin:1px" alt="">`).join('');
+  const thumbs = c.photoIds.slice(0, 4).map((id) => `<img src="${thumbUrl(id, 480)}" style="width:44px;height:44px;object-fit:cover;border-radius:6px;margin:1px" alt="">`).join('');
   return `<div style="width:250px">
     <p class="lp-mile">check-in ${n} · mile ${fmtMi(c.mile)}</p>
     <p class="lp-name">${esc(c.name)}</p>
@@ -380,7 +475,7 @@ function openCheckinEditor(checkinId, mileHint) {
   state.checkinBeingEdited = checkinId || null;
   const c = checkinId ? state.checkins.find((x) => x.id === checkinId) : null;
   const h = state.hike;
-  $('#modalTitle').textContent = c ? 'Edit check-in' : 'New FarOut-style check-in';
+  $('#modalTitle').textContent = c ? 'Edit check-in' : 'New check-in';
   let mile = mileHint != null ? Math.round(mileHint * 10) / 10 : (c ? Number(c.mile) : null);
   const guessDn = c ? (c.date || (mile != null ? dayForMile(mile) : null)) : (mile != null ? dayForMile(mile) : null);
   $('#ciName').value = c ? c.name : (mile != null ? `Around mile ${fmtMi(mile)}` : '');
@@ -412,7 +507,7 @@ function openCheckinEditor(checkinId, mileHint) {
     el.className = 'pick';
     el.dataset.id = p.id;
     const sel = state.modalPhotoSelection.has(p.id);
-    el.innerHTML = `<img loading="lazy" src="thumbs/480/${encodeURIComponent(p.id)}" alt=""><span class="mile">~${fmtMi(mp && mp.mile)}</span><span class="pd">${fmtDate(p.date)}</span><span class="tk">&#10003;</span>`;
+    el.innerHTML = `<img loading="lazy" src="${thumbUrl(p, 480)}" alt=""><span class="mile">~${fmtMi(mp && mp.mile)}</span><span class="pd">${fmtDate(p.date)}</span><span class="tk">&#10003;</span>`;
     if (sel) el.classList.add('sel');
     el.addEventListener('click', () => {
       if (state.modalPhotoSelection.has(p.id)) state.modalPhotoSelection.delete(p.id); else state.modalPhotoSelection.add(p.id);
@@ -477,6 +572,7 @@ function closeModal() { $('#modal').hidden = true; $('#modal').setAttribute('ari
 /* ---------------- check-in rail list (grouped by state + brief history) ---------------- */
 function renderCheckinList() {
   const ul = $('#checkinList');
+  if (!ul) return;
   ul.innerHTML = '';
   const byState = new Map();
   for (const c of state.checkins) {
@@ -499,7 +595,7 @@ function renderCheckinList() {
     const blurb = STATE_BLURBS[s.state] || '';
     const mid = ((Number(s.from) + Number(s.to)) / 2).toFixed(1);
     const itemsHTML = items.map((c) => {
-      const thumbs = c.photoIds.slice(0, 4).map((id) => `<img loading="lazy" src="thumbs/480/${encodeURIComponent(id)}" alt="">`).join('');
+      const thumbs = c.photoIds.slice(0, 4).map((id) => `<img loading="lazy" src="${thumbUrl(id, 480)}" alt="">`).join('');
       return `<li class="ci-item" data-mid="${fmtMi(c.mile)}" data-name="${esc(c.name)}" data-id="${c.id}">
         <div class="ci-top"><span class="ci-mile">${fmtMi(c.mile)} mi</span><span class="ci-name">${esc(c.name)}</span><span class="ci-date">${c.date ? fmtDate(c.date) : ''}</span></div>
         ${c.note ? `<p class="ci-note">${esc(c.note)}</p>` : ''}
@@ -516,8 +612,7 @@ function renderCheckinList() {
         <span class="st-badge">${nPhotos} photo${nPhotos === 1 ? '' : 's'}</span>
       </div>
       ${blurb ? `<p class="state-hist">${esc(blurb)}</p>` : ''}
-      <ul class="ci-list">${itemsHTML}</ul>
-      ${items.length === 0 && nPhotos > 0 ? '<p class="sec-empty-note">No check-in here yet — open a photo of this state and add one.</p>' : ''}`;
+      <ul class="ci-list">${itemsHTML}</ul>`;
     sec.querySelector('.state-head').addEventListener('click', () => {
       if (state.map) {
         state.map.setView(miToLatLng(Number(mid)), Math.max(state.map.getZoom(), 8));
@@ -540,8 +635,11 @@ function renderCheckinList() {
   renderStats();
 }
 function renderStats() {
+  // the rail's photo/check-in counters were removed — nothing to update
+  const el = $('#statPhotos');
+  if (!el) return;
   const placed = state.photos.filter((p) => mileForPhoto(p) != null).length;
-  $('#statPhotos').textContent = state.photos.length;
+  el.textContent = state.photos.length;
   $('#statPlaced').textContent = placed;
   $('#statCheckins').textContent = state.checkins.length;
   const h = state.hike;
@@ -562,21 +660,22 @@ function buildMonthOptions() {
   });
 }
 function galleryFiltered() {
-  const q = $('#gallerySearch').value.trim().toLowerCase();
-  const month = $('#galleryMonth').value;
-  const placedOnly = $('#galleryPlacedOnly').checked;
+  const qEl = $('#gallerySearch'), mEl = $('#galleryMonth'), pEl = $('#galleryPlacedOnly'), sEl = $('#gallerySort');
+  const q = (qEl && qEl.value ? qEl.value : '').trim().toLowerCase();
+  const month = mEl ? mEl.value : '';
+  const placedOnly = !!(pEl && pEl.checked);
   let arr = state.photos.filter((p) => {
     if (month && (!p.date || !p.date.startsWith(month))) return false;
     if (q) {
       const ci = checkinForPhoto(p.id);
-      const hay = `${p.id} ${state.captions[p.id] || ''} ${ci ? ci.name + ' ' + ci.note : ''}`.toLowerCase();
+      const hay = `${p.id} ${commentText(p.id)} ${ci ? ci.name + ' ' + ci.note : ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     const mp = mileForPhoto(p);
     if (placedOnly && mp == null) return false;
     return true;
   });
-  const sort = $('#gallerySort').value;
+  const sort = sEl ? sEl.value : 'dateAsc';
   arr.sort((a, b) => {
     if (sort === 'dateAsc' || sort === 'dateDesc') {
       const c = (a.date || '') < (b.date || '') ? -1 : (a.date || '') > (b.date || '') ? 1 : 0;
@@ -594,17 +693,19 @@ function galleryFiltered() {
 }
 function renderGallery() {
   if (!state.photos.length) return;
-  const arr = galleryFiltered();
   const grid = $('#galleryGrid');
+  if (!grid) return;
+  const arr = galleryFiltered();
   grid.innerHTML = '';
-  $('#galleryEmpty').hidden = arr.length > 0;
+  const emptyEl = $('#galleryEmpty');
+  if (emptyEl) emptyEl.hidden = arr.length > 0;
   for (const p of arr) {
     const mp = mileForPhoto(p);
     const ci = checkinForPhoto(p.id);
-    const cap = state.captions[p.id];
+    const cap = commentText(p.id);
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `<figure><img loading="lazy" src="thumbs/480/${encodeURIComponent(p.id)}" alt="${esc(p.date || p.id)}"></figure>
+    card.innerHTML = `<figure><img loading="lazy" src="${thumbUrl(p, 480)}" alt="${esc(p.date || p.id)}"></figure>
       <div class="cap">
         <div class="d"><span>${fmtDate(p.date)}</span>${mp ? `<span class="milechip">${fmtMi(mp.mile)} mi</span>` : '<span class="chip">no date</span>'}</div>
         <div class="t">${cap ? esc(cap) : (ci ? `In check-in “${esc(ci.name)}”` : (p.summary || p.id))}</div>
@@ -616,12 +717,21 @@ function renderGallery() {
     grid.appendChild(card);
   }
 }
-function resetGalleryFilters() { $('#gallerySearch').value = ''; $('#galleryMonth').value = ''; $('#galleryPlacedOnly').checked = false; renderGallery(); }
+function resetGalleryFilters() {
+  ['#gallerySearch', '#galleryMonth', '#galleryPlacedOnly'].forEach((s) => {
+    const el = $(s);
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = false; else el.value = '';
+  });
+  renderGallery();
+}
 
 /* ---------------- screenshots ---------------- */
 function renderScreens() {
   const grid = $('#screenGrid');
-  const sort = $('#screenSort').value;
+  if (!grid) return;
+  const sEl = $('#screenSort');
+  const sort = sEl ? sEl.value : 'dateAsc';
   const arr = [...state.screenshots];
   arr.sort((a, b) => {
     if (sort.startsWith('date')) { const c = (a.date || '') < (b.date || '') ? -1 : (a.date || '') > (b.date || '') ? 1 : 0; return sort === 'dateAsc' ? c : -c; }
@@ -632,7 +742,7 @@ function renderScreens() {
   for (const s of arr) {
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `<figure><img loading="lazy" src="thumbs/480/${encodeURIComponent(s.id)}" alt=""></figure>
+    card.innerHTML = `<figure><img loading="lazy" src="${thumbUrl(s, 480)}" alt=""></figure>
       <div class="cap"><div class="d"><span>${fmtDate(s.date)}</span></div><div class="t" title="${esc(s.id)}">${esc(s.id.slice(0, 42))}${s.id.length > 42 ? '…' : ''}</div></div>`;
     card.addEventListener('click', () => openDetail(s.id, true));
     card.addEventListener('mouseenter', () => showHoverZoom(s, true));
@@ -648,24 +758,17 @@ function openDetail(photoId, isScreen) {
   const body = $('#drawerBody');
   const mp = isScreen ? null : mileForPhoto(p);
   const ci = isScreen ? null : checkinForPhoto(p.id);
-  const cap = state.captions[p.id] || '';
+  const cap = commentText(p.id);
   const exifPanel = (title, rows) => rows.length ? `<div class="panel"><h3>${title}</h3><dl>${rows.map(([k, v]) => v == null || v === '' ? '' : `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div>` : '';
   const placementHTML = isScreen ? '' : `
     <div class="panel">
       <h3>Trail placement</h3>
       <div class="placement">
         <div class="mile-big">${mp ? fmtMi(mp.mile) : '—'} <span style="font-size:13px;color:var(--ink-soft)">mi</span></div>
-        <div class="mile-est">${mp ? (mp.fixed ? 'You pinned this mile.' : `Auto-estimated from ${fmtDate(p.date)} (linear date pace${state.checkins.some((c) => c.anchor) ? ', bent by your calibration anchors' : ''}).`) : (p.date ? 'Could not estimate — drag the slider to pin it.' : 'This photo has no readable date; pin it manually below.')}</div>
+        <div class="mile-est">${mp ? (mp.fixed ? 'Pinned mile.' : `Auto-estimated from ${fmtDate(p.date)} (linear date pace${state.checkins.some((c) => c.anchor) ? ', bent by your calibration anchors' : ''}).`) : 'No mile for this photo.'}</div>
         ${ci ? `<div><span class="chip">In check-in “${esc(ci.name)}”</span> <button class="link" onclick="detachFromCheckin('${p.id}')">remove</button></div>` : ''}
-        <div class="slider-row">
-          <input type="range" id="dtMileSlider" min="0" max="${Number(state.hike.totalMiles)}" step="0.1" value="${mp ? mp.mile : 0}">
-          <input type="number" id="dtMileNum" style="width:92px" step="0.1" min="0" max="${Number(state.hike.totalMiles)}" value="${mp ? mp.mile : ''}" placeholder="exact mile">
-        </div>
-        <div>
-          <button class="primary small" id="dtApply">Pin at this mile</button>
-          ${ci ? '' : `<button class="ghost small" id="dtCheckin">Make a check-in here…</button>`}
-        </div>
-        <p class="trail-note">Miles follow FarOut-style guide miles (0 = Springer, ${fmtMi(state.hike.totalMiles)} ≈ Katahdin). Pin any photo you remember precisely — it will move on the map instantly.</p>
+        ${ci ? '' : `<div><button class="ghost small" id="dtCheckin">Make a check-in here…</button></div>`}
+        <p class="trail-note">Guide miles: 0 = Springer, ${fmtMi(state.hike.totalMiles)} ≈ Katahdin. Photos are placed automatically from their date.</p>
       </div>
     </div>`;
   const cameraRows = [];
@@ -684,17 +787,21 @@ function openDetail(photoId, isScreen) {
     ['MIME type', 'image/jpeg'], ['Size on disk', p.bytes ? (p.bytes / 1e6).toFixed(1) + ' MB' : '—'],
   ];
   body.innerHTML = `
+  <div class="drawer-random"><button class="primary" id="dtRandom">&#127922; Random photo</button></div>
   <div class="detail">
     <div class="photo-side">
-      <img class="ph" src="thumbs/1600/${encodeURIComponent(p.id)}" alt="">
+      <img class="ph" src="${thumbUrl(p, 1600)}" alt="">
     </div>
     <div class="info-side">
       <h2>${isScreen ? 'Screenshot' : fmtDate(p.date)}</h2>
       <div class="sub">${p.summary ? esc(p.summary) : (p.make || 'no camera info')}${mp ? ` · ~ mile ${fmtMi(mp.mile)}` : ''}</div>
       ${placementHTML}
-      <div class="panel"><h3>Caption · show &amp; tell</h3>
-        <textarea class="caption-box" id="dtCaption" rows="2" placeholder="Tell the story of this photo…">${esc(cap)}</textarea>
-        <div class="actions" style="margin-top:8px"><button class="primary small" id="dtSaveCap">Save caption</button></div>
+      <div class="panel"><h3>Comments</h3>
+        <ul class="cmt-list" id="dtComments">${commentsHTML(p.id)}</ul>
+        <div class="cmt-add">
+          <textarea id="dtCommentBox" rows="2" placeholder="Leave a comment…"></textarea>
+          <button class="primary small" id="dtAddComment">Add comment</button>
+        </div>
       </div>
       ${exifPanel('Camera', cameraRows)}
       ${exifPanel('Exposure', exRows)}
@@ -702,23 +809,26 @@ function openDetail(photoId, isScreen) {
       ${isScreen ? '' : '<p class="trail-note">Like Pic2Map, this panel shows the EXIF data embedded by the phone. The GPS block is missing because location data was stripped from these files — that is why placement is by trail mile instead of coordinates.</p>'}
     </div>
   </div>`;
-  const msel = $('#dtMileSlider'), mnum = $('#dtMileNum');
-  const sync = (v) => { msel.value = v; mnum.value = Math.round(Number(v) * 10) / 10; };
-  msel.addEventListener('input', () => { mnum.value = msel.value; });
-  mnum.addEventListener('input', () => { msel.value = Math.min(Math.max(mnum.value, 0), state.hike.totalMiles); });
-  $('#dtApply').addEventListener('click', () => {
-    const v = parseFloat(mnum.value || msel.value);
-    if (!isFinite(v)) { toast('Enter a mile'); return; }
-    state.overrides[p.id] = Math.round(v * 10) / 10;
-    save(); renderTrailMarkers(); renderGallery(); renderCheckinList(); renderStats();
-    toast(`Pinned ${p.id.slice(0, 22)} at mile ${fmtMi(v)}`);
-  });
   const mk = $('#dtCheckin');
   if (mk) mk.addEventListener('click', () => { closeDrawer(); const m = mileForPhoto(p); openCheckinEditor(null, m ? m.mile : 0); if (m) $('#ciDate').value = p.date ? p.date.slice(0, 10) : ''; state.modalPhotoSelection.add(p.id); updateCiCounter(); $$('#ciPhotoGrid .pick').forEach((el) => el.classList.toggle('sel', state.modalPhotoSelection.has(el.dataset.id))); });
-  $('#dtSaveCap').addEventListener('click', () => {
-    const t = $('#dtCaption').value.trim();
-    if (t) state.captions[p.id] = t; else delete state.captions[p.id];
-    save(); renderGallery(); renderCheckinList(); toast('Caption saved');
+  const addBtn = $('#dtAddComment');
+  const box = $('#dtCommentBox');
+  if (addBtn && box) {
+    const commit = () => {
+      if (!addComment(p.id, box.value)) { toast('Write something first'); return; }
+      box.value = '';
+      $('#dtComments').innerHTML = commentsHTML(p.id);
+      renderGallery(); renderTrailMarkers();
+      toast('Comment added');
+    };
+    addBtn.addEventListener('click', commit);
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) commit(); });
+  }
+  const rnd = $('#dtRandom');
+  if (rnd) rnd.addEventListener('click', () => {
+    let next = p;
+    if (state.photos.length > 1) { while (next.id === p.id) next = state.photos[Math.floor(Math.random() * state.photos.length)]; }
+    openDetail(next.id);
   });
   showDrawer();
 }
@@ -731,26 +841,6 @@ function detachFromCheckin(photoId) {
 }
 function showDrawer() { $('#drawer').hidden = false; $('#drawer').setAttribute('aria-hidden', 'false'); }
 function closeDrawer() { $('#drawer').hidden = true; $('#drawer').setAttribute('aria-hidden', 'true'); }
-
-/* ---------------- settings ---------------- */
-function fillSettings() {
-  const h = state.hike;
-  $('#setStartDate').value = h.startDate; $('#setEndDate').value = h.endDate;
-  $('#setStartName').value = h.startName || ''; $('#setEndName').value = h.endName || '';
-  $('#setTotalMiles').value = h.totalMiles;
-}
-function saveSettings() {
-  const s = $('#setStartDate').value, e = $('#setEndDate').value;
-  if (!s || !e) { toast('Need both dates'); return; }
-  state.hike.startDate = s; state.hike.endDate = e;
-  state.hike.startName = $('#setStartName').value || state.hike.startName;
-  state.hike.endName = $('#setEndName').value || state.hike.endName;
-  const tm = parseFloat($('#setTotalMiles').value);
-  state.hike.totalMiles = isFinite(tm) && tm > 0 ? tm : state.hike.totalMiles;
-  save(); renderTrailMarkers(); renderGallery(); renderCheckinList(); renderStats(); renderGallery();
-  fillSettings();
-  toast('Hike settings saved — auto-placed photos now follow the new dates/miles.');
-}
 
 /* init helpers called after boot */
 
@@ -773,19 +863,19 @@ const DEFAULT_STATE_CUTS = [
 ];
 
 const STATE_BLURBS = {
-  'Georgia': 'Where the journey begins — Springer Mountain, the 8.8-mile approach trail from Amicalola Falls, and some of the friendliest shelters on the trail before the climb over Blood Mountain.',
-  'North Carolina & Tennessee': 'Nearly four hundred miles in which the trail rides the state line — through Great Smoky Mountains National Park and over the Roan Highlands, including the AT’s high point at Clingmans Dome (6,643 ft).',
-  'Virginia': 'The longest state on the trail: the Triple Crown of McAfee Knob, Tinker Cliffs and Dragon’s Tooth, all of Shenandoah National Park, and hundreds of ridgeline miles that stretch both the legs and the mind.',
-  'West Virginia': 'A blink of the trail through Harpers Ferry — home of the Appalachian Trail Conservancy and the place thru-hikers mark as their psychological halfway point.',
-  'Maryland': '41 friendly, easy-going miles from the Potomac River toward the Mason–Dixon Line, where the trail trades southern mountains for gentle, wooded hills.',
-  'Pennsylvania': '“Rocksylvania” — long rocky ridge walks and the legendary half-gallon ice-cream challenge at Pine Grove Furnace, just past the true halfway mark of the whole trail.',
-  'New Jersey': 'The Garden State surprises: 72 quiet miles through dense woods, past Sunfish Pond’s glacial lake, up to the trail’s high point at High Point.',
-  'New York': 'Eighty-eight miles of bear country heading north out of Jersey, ending with the Hudson crossing at the Bear Mountain Bridge — the trail’s lowest point.',
-  'Connecticut': 'The shortest New England state — just over fifty easy miles of low, rolling, wooded hills through small towns that welcome hikers.',
-  'Massachusetts': 'Ninety miles of New England walking up to Mt. Greylock (the state’s highest peak) and past the legendary “Cookie Lady” in Becket.',
-  'Vermont': 'One hundred fifty miles over the Green Mountains, where the AT runs together with the Long Trail and the South’s heat gives way to cool alpine ridges.',
-  'New Hampshire': 'The hardest miles on the whole trail: 161 rugged miles through the White Mountains — Franconia Ridge, the Presidentials and the exposed summit of Mt. Washington.',
-  'Maine': 'The final push: the roadless 100-Mile Wilderness, the Bigelows and finally Katahdin, where the summit sign at Baxter Peak ends the journey.',
+  'Georgia': 'Where every thru-hike starts: 78 miles of pure optimism, Blood Mountain’s staircase, and the last time your pack will feel light.',
+  'North Carolina & Tennessee': 'Nearly four hundred miles of state-line hopscotch — the Smokies, Clingmans Dome, and balds that make you whisper “wait, this is the South?”',
+  'Virginia': 'The long haul: the Triple Crown of views, all of Shenandoah, and enough ridgeline miles to make you question your hobbies.',
+  'West Virginia': 'Four glorious miles wrapped around Harpers Ferry — the ATC HQ, the psychological halfway, and the best shower of your life.',
+  'Maryland': '41 miles of “the friendliest state,” gently rolling and suspiciously easy. Enjoy it — Pennsylvania is loading.',
+  'Pennsylvania': 'Rocksylvania: where boots go to die and the half-gallon at Pine Grove Furnace is the only medically approved coping mechanism.',
+  'New Jersey': 'The Garden State’s party trick: glacial ponds, sneaky ridge views, and bears who have clearly read the hiker handbook.',
+  'New York': '88 miles of rock, ridge and one dramatic river crossing at Bear Mountain — the trail’s lowest point and highest drama.',
+  'Connecticut': 'Fifty-odd miles of gentle woods and small towns: the trail’s coffee break, with better snacks.',
+  'Massachusetts': 'Ninety miles up Greylock and past the Cookie Lady, where “just one more” becomes an actual nutrition strategy.',
+  'Vermont': 'One hundred fifty miles of Green Mountain charm and mud, sharing the path with the Long Trail and mosquitos with strong opinions.',
+  'New Hampshire': 'The boss level: Franconia Ridge, the Presidentials, Mt. Washington, and 161 miles that will absolutely humble you.',
+  'Maine': 'The last 280 — the 100-Mile Wilderness, Saddleback, the Bigelows, and Katahdin’s sign. Bring tissues and a large pizza.',
 };
 
 function stateNameOf(mile) {
@@ -867,7 +957,7 @@ function showTsPreview(p) {
   hideHoverZoom();
   el.hidden = false;
   const img = el.querySelector('img') || (el.innerHTML = '<img alt=""><div class="tp-meta"><span class="tp-date"></span><span class="tp-sub"></span><span class="tp-mile"></span></div>', el.querySelector('img'));
-  img.src = `thumbs/1600/${encodeURIComponent(p.id)}`;
+  img.src = thumbUrl(p, 1600);
   img.alt = p.date || p.id;
   el.querySelector('.tp-date').textContent = fmtDate(p.date);
   el.querySelector('.tp-sub').textContent = p.summary || (mp ? (mp.fixed ? 'pinned by you' : 'auto-placed by date') : 'no camera info');
@@ -883,7 +973,7 @@ function showHoverZoom(p, isScreen) {
   const mp = isScreen ? null : mileForPhoto(p);
   el.hidden = false;
   el.innerHTML = `
-    <img loading="lazy" src="thumbs/1600/${encodeURIComponent(p.id)}" alt="">
+    <img loading="lazy" src="${thumbUrl(p, 1600)}" alt="">
     <div class="hz-meta">
       <span class="hz-date">${fmtDate(p.date)}</span>
       <span class="hz-sub">${esc(p.summary || p.id)}</span>
@@ -900,4 +990,61 @@ function flashCard(id) {
   card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   card.classList.add('flash');
   setTimeout(() => card.classList.remove('flash'), 1600);
+}
+
+/* ================= campfire nights (from EXTRA INFO/caitlog.txt) ================= */
+function campfireSVG(px = 16) {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" aria-hidden="true">
+    <path d="M12 2.6c2.6 3.3 4.2 5.3 4.2 7.7a4.2 4.2 0 0 1-8.4 0c0-2.4 1.6-4.4 4.2-7.7z" fill="#e8801f"/>
+    <path d="M12 7.4c1.3 1.7 2.1 2.8 2.1 3.9a2.1 2.1 0 1 1-4.2 0c0-1.1.8-2.2 2.1-3.9z" fill="#ffd765"/>
+    <path d="M6.4 16.9l11.2 3.3M17.6 16.9L6.4 20.2" stroke="#8a4d1d" stroke-width="2.4" stroke-linecap="round"/>
+  </svg>`;
+}
+
+/** Campfire position in the map's current mile domain (follows your Settings length). */
+function campMile(c) {
+  const total = Number(state.hike.totalMiles) || 2190.4;
+  const m = Number(c.logCum) * (total / state.campLogTotal);
+  return Math.min(Math.max(m, 0), total);
+}
+
+function campPopup(c) {
+  const st = c.state ? `<span class="chip">${esc(stateFullName(c.state))}</span>` : '';
+  return `<div style="width:236px">
+    <p class="cf-head">${campfireSVG(15)}<span>Night ${c.day}</span></p>
+    <p class="lp-name">${esc(c.name)}</p>
+    <p><span class="lp-mile">mile ${fmtMi(campMile(c))}</span> ${st}</p>
+    <p class="lp-date">${c.dayMiles ? `${fmtMi(c.dayMiles)} mi hiked that day` : 'no miles logged'}${c.exact ? '' : ' · mile estimated from the day chain'}</p>
+    <p class="cf-src">campfire night from <b>caitlog.txt</b>${c.notes && c.notes.length ? ` · ${esc(c.notes.join(', '))}` : ''}</p>
+  </div>`;
+}
+
+function stateFullName(abbr) {
+  const map = { GA: 'Georgia', NC: 'North Carolina', TN: 'Tennessee', VA: 'Virginia', WV: 'West Virginia', MD: 'Maryland', PA: 'Pennsylvania', NJ: 'New Jersey', NY: 'New York', CT: 'Connecticut', MA: 'Massachusetts', VT: 'Vermont', NH: 'New Hampshire', ME: 'Maine' };
+  return map[abbr] || abbr;
+}
+
+function renderCamps() {
+  if (!state.campLayer) return;
+  state.campLayer.clearLayers();
+  let n = 0;
+  for (const c of state.camps) {
+    if (c.logCum == null) continue;
+    const mk = L.marker(miToLatLng(campMile(c)), {
+      icon: L.divIcon({ className: '', html: `<div class="campfire" title="Night ${c.day} — ${esc(c.name)}">${campfireSVG(36)}</div>`, iconSize: [40, 40], iconAnchor: [20, 28] }),
+      riseOnHover: true, zIndexOffset: 250,
+    });
+    mk.bindPopup(campPopup(c), { maxWidth: 270 });
+    mk.addTo(state.campLayer);
+    n++;
+  }
+  const el = $('#campCount');
+  if (el) el.textContent = n;
+}
+
+function toggleCamps() {
+  if (!state.map || !state.campLayer) return;
+  const btn = $('#btnToggleCamps');
+  if (state.map.hasLayer(state.campLayer)) { state.map.removeLayer(state.campLayer); if (btn) btn.textContent = 'Show campfires'; }
+  else { state.map.addLayer(state.campLayer); if (btn) btn.textContent = 'Hide campfires'; }
 }
