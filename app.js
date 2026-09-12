@@ -293,8 +293,10 @@ function initUI() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeDrawer(); closeModal(); } });
   $$('[data-close-drawer]').forEach((el) => el.addEventListener('click', closeDrawer));
   $$('[data-close-modal]').forEach((el) => el.addEventListener('click', closeModal));
-  // mobile rail opener
+  // mobile rail opener / closer
   on('#btnListRail', 'click', toggleRail);
+  on('#btnRailMobile', 'click', toggleRail);
+  on('#btnRailClose', 'click', closeRail);
   initLegendToggle();
 }
 /* collapsible map legend (the little arrow closes the panel) */
@@ -321,15 +323,23 @@ function initLegendToggle() {
 function toggleRail() {
   const rail = $('#rail');
   if (!rail) return;
-  if (window.innerWidth <= 900) rail.classList.toggle('open');
-  else {
+  if (window.innerWidth <= 900) {
+    const open = rail.classList.toggle('open');
+    document.body.classList.toggle('rail-open', open);
+  } else {
     const hidden = document.body.classList.toggle('rail-hidden');
     const btn = $('#btnListRail');
     if (btn) btn.textContent = hidden ? '☰ Show check-ins' : '✕ Hide check-ins';
   }
 }
+function closeRail() {
+  const rail = $('#rail');
+  if (rail) rail.classList.remove('open');
+  document.body.classList.remove('rail-open');
+}
 function switchView(name) {
   state.view = name;
+  closeRail();
   $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
   if (name === 'map' && state.map) setTimeout(() => state.map.invalidateSize(), 60);
@@ -345,6 +355,9 @@ function initMap() {
   // the legend lives inside the map container now — keep its clicks/scrolls off the map
   const legendEl = document.getElementById('legend');
   if (legendEl) { L.DomEvent.disableClickPropagation(legendEl); L.DomEvent.disableScrollPropagation(legendEl); }
+  // the mobile "States" button must not bubble into the map click handler
+  const fab = document.getElementById('btnRailMobile');
+  if (fab) L.DomEvent.disableClickPropagation(fab);
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   });
@@ -373,9 +386,11 @@ function initMap() {
   for (let m = 100; m < Number(state.hike.totalMiles); m += 100) miLabel(m);
 
   map.on('click', (ev) => {
+    // on phones the rail is a sheet over the map: a tap anywhere on the map closes it
+    if (window.innerWidth <= 900 && document.body.classList.contains('rail-open')) { closeRail(); return; }
     // ignore clicks on the legend, markers, popups and controls
     const t = ev.originalEvent && ev.originalEvent.target;
-    if (t && t.closest && t.closest('#legend,.leaflet-marker-icon,.leaflet-interactive,.leaflet-popup,.leaflet-control,.leaflet-bar,.mi-label')) return;
+    if (t && t.closest && t.closest('#legend,#btnRailMobile,.leaflet-marker-icon,.leaflet-interactive,.leaflet-popup,.leaflet-control,.leaflet-bar,.mi-label')) return;
     const mi = latLngToMi(ev.latlng);
     // only treat clicks very close to the trail as check-in placement
     const pt = miToLatLng(mi);
