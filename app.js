@@ -248,7 +248,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     safe('initUI', initUI);
     safe('initMap', initMap);
     safe('initTimelineBars', initTimelineBars);
-    safe('renderStats', renderStats);
     safe('renderCheckinList', renderCheckinList);
     safe('renderGallery', renderGallery);
     safe('renderScreens', renderScreens);
@@ -262,7 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const host = $('#view-map');
     const msg = e && e.message ? esc(e.message) : 'unknown error';
     const hint = /fetch|Failed to load|NetworkError/i.test(String(e && e.message))
-      ? 'The data files could not be fetched. On GitHub Pages, publish the <b>contents of the <code>site/</code> folder</b> as the site root (with <code>data/</code>, <code>thumbs/</code> and <code>vendor/</code> committed).<br>Locally, start it with <code>node server.js</code> in the photo-map-site folder.'
+      ? 'The data files could not be fetched. They must sit next to index.html — <code>data/</code>, <code>thumbs/</code> and <code>vendor/</code> — and the page must be served over http (opening index.html from disk blocks <code>fetch</code>).'
       : 'Open the browser console (F12) for the full stack trace.';
     if (host) host.innerHTML = `<div class="spinner-wrap"><div>Could not load data: ${msg}<br>${hint}</div></div>`;
   }
@@ -569,7 +568,7 @@ function saveCheckin() {
     const i = state.checkins.findIndex((c) => c.id === rec.id);
     state.checkins[i] = rec;
   } else state.checkins.push(rec);
-  save(); closeModal(); renderCheckinList(); renderTrailMarkers(); renderGallery(); renderStats();
+  save(); closeModal(); renderCheckinList(); renderTrailMarkers(); renderGallery();
   toast(`Saved “${name}”`);
   fitTrail();
 }
@@ -577,7 +576,7 @@ function deleteCheckin(id) {
   const c = state.checkins.find((x) => x.id === id);
   if (c && confirm(`Delete check-in “${c.name}” (${c.photoIds.length} photo(s) attached)?`)) {
     state.checkins = state.checkins.filter((x) => x.id !== id);
-    save(); closeModal(); renderCheckinList(); renderTrailMarkers(); renderGallery(); renderStats();
+    save(); closeModal(); renderCheckinList(); renderTrailMarkers(); renderGallery();
     toast('Check-in deleted');
   }
 }
@@ -647,21 +646,7 @@ function renderCheckinList() {
     });
     ul.appendChild(sec);
   }
-  renderStats();
 }
-function renderStats() {
-  // the rail's photo/check-in counters were removed — nothing to update
-  const el = $('#statPhotos');
-  if (!el) return;
-  const placed = state.photos.filter((p) => mileForPhoto(p) != null).length;
-  el.textContent = state.photos.length;
-  $('#statPlaced').textContent = placed;
-  $('#statCheckins').textContent = state.checkins.length;
-  const h = state.hike;
-  const days = dayNum(h.endDate) - dayNum(h.startDate);
-  $('#statPace').textContent = days > 0 ? (Number(h.totalMiles) / days).toFixed(1) : '—';
-}
-
 /* ---------------- gallery ---------------- */
 function buildMonthOptions() {
   const set = new Set(state.photos.filter((p) => p.date).map((p) => p.date.slice(0, 7)));
@@ -850,7 +835,7 @@ function openDetail(photoId, isScreen) {
 function detachFromCheckin(photoId) {
   for (const c of state.checkins) c.photoIds = c.photoIds.filter((x) => x !== photoId);
   delete state.overrides[photoId];
-  save(); renderTrailMarkers(); renderCheckinList(); renderGallery(); renderStats();
+  save(); renderTrailMarkers(); renderCheckinList(); renderGallery();
   toast('Removed from check-in');
   closeDrawer();
 }
