@@ -77,3 +77,35 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   align-items: center;
   gap: 6px;
 }
+
+/* ---------- polish pass ---------- */
+
+/* Phone: keep the legend above the map attribution, which wraps to two lines */
+@media (max-width: 900px) {
+  .legend { bottom: 46px; }
+  .leaflet-control-attribution { font-size: 10px; }
+  .toolbar { padding: 8px 10px; gap: 6px; }
+}
+
+/* .ghost buttons are styled for the dark header; on light panels they disappear */
+.drawer .ghost, .modal .ghost {
+  color: var(--ink);
+  background: #fff;
+  border-color: var(--line);
+}
+.drawer .ghost:hover, .modal .ghost:hover {
+  background: #f2f0e6;
+}
+
+/* State badges stay on one line ("37 photos" wrapped to two) */
+.state-head .st-badge {
+  white-space: nowrap;
+}
+
+/* Phone map: the mile labels pile onto the cluster badges when zoomed out; the rail carries the same numbers */
+@media (max-width: 900px) {
+  .mi-label { display: none; }
+}
+
+/* Drawer random button: the die icon sits on the label's baseline */
+.drawer-random .primary { display:inline-flex; align-items:center; gap:6px; }

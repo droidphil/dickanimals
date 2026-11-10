@@ -787,7 +787,7 @@ function openDetail(photoId, isScreen) {
     ['MIME type', 'image/jpeg'], ['Size on disk', p.bytes ? (p.bytes / 1e6).toFixed(1) + ' MB' : '—'],
   ];
   body.innerHTML = `
-  <div class="drawer-random"><button class="primary" id="dtRandom">&#127922; Random photo</button></div>
+  <div class="drawer-random"><button class="primary" id="dtRandom"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>Random photo</button></div>
   <div class="detail">
     <div class="photo-side">
       <img class="ph" src="${thumbUrl(p, 1600)}" alt="">
