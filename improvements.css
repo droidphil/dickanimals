@@ -1,0 +1,79 @@
+/* Accessibility and readability pass. Loads after style.css and overrides only the rules listed here.
+   Remove this file and its <link> in index.html to get the original look back. */
+
+:root {
+  /* Small amber text. --amber-deep (#c77f1f) is only 2.9-3.2:1 on the paper and white
+     surfaces; this shade is 5.3-5.9:1 and keeps the same hue. */
+  --amber-text: #8a5a12;
+}
+
+/* Mile markers and counts set in small amber text */
+.ci-mile, .lp-mile, .placement .mile-big, .tsbar .ts-top .ts-mile,
+.ts-preview .tp-mile, .hover-zoom .hz-mile, .cf-head, .state-head .st-mile {
+  color: var(--amber-text);
+}
+
+/* State descriptions: upright body face instead of small italic display face, and no
+   coloured left border (a 3px accent border on a callout is a common AI-look tell). */
+.state-hist {
+  font-family: 'Expletus Sans', 'Segoe UI', Arial, sans-serif;
+  font-style: normal;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #4f4636;
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 4px 6px 8px;
+  padding: 7px 11px;
+}
+
+/* Keyboard focus: visible on every control, themed to the palette */
+:focus-visible {
+  outline: 3px solid var(--amber-deep);
+  outline-offset: 2px;
+}
+#topbar :focus-visible {
+  outline-color: #ffe9c2;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--green-700);
+  outline-offset: 0;
+  border-color: var(--green-700);
+}
+
+/* Text selection in the palette, not the browser blue */
+::selection {
+  background: var(--amber);
+  color: var(--green-900);
+}
+
+/* Respect "reduce motion": the scrub-dot pulse and card transitions stop animating */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Phone header: the tab strip scrolls sideways, so fade its right edge to show there is more */
+@media (max-width: 900px) {
+  .tabs {
+    -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent);
+    mask-image: linear-gradient(90deg, #000 80%, transparent);
+  }
+}
+
+/* Smallest functional text raised to the 11px floor (legend title, state badges, footer on phones) */
+.legend-head, .state-head .st-mile, .state-head .st-badge, #foot {
+  font-size: 11px;
+}
+
+/* Random button: the die icon sits on the label's baseline */
+#btnRandom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

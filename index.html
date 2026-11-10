@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="vendor/leaflet.markercluster/MarkerCluster.css">
 <link rel="stylesheet" href="vendor/leaflet.markercluster/MarkerCluster.Default.css">
 <link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="improvements.css?v=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%231e4d2b'/%3E%3Cpath d='M15 70 L85 70' stroke='%23f5f2ea' stroke-width='12' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -31,7 +32,7 @@
     <button data-view="screens" class="tab">Screenshots<span id="screenCount" class="badge"></span></button>
   </nav>
   <div class="top-actions">
-    <button id="btnRandom" class="ghost" title="Jump to a random photo">&#127922; Random</button>
+    <button id="btnRandom" class="ghost" title="Jump to a random photo"><svg class="ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>Random</button>
   </div>
 </header>
 
@@ -53,12 +54,12 @@
       <div class="legend-body">
         <div><span class="dot checkin-dot"></span> Check-in (numbered)</div>
         <div><span class="dot photo-dot"></span> Photo — auto-placed by date</div>
-        <div><span class="campfire legend-fire">&#128293;</span> Campfire night (<span id="campCount">0</span>)</div>
+        <div><span class="campfire legend-fire"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.6c2.6 3.3 4.2 5.3 4.2 7.7a4.2 4.2 0 0 1-8.4 0c0-2.4 1.6-4.4 4.2-7.7z" fill="#e8801f"/><path d="M12 7.4c1.3 1.7 2.1 2.8 2.1 3.9a2.1 2.1 0 1 1-4.2 0c0-1.1.8-2.2 2.1-3.9z" fill="#ffd765"/><path d="M6.4 16.9l11.2 3.3M17.6 16.9L6.4 20.2" stroke="#8a4d1d" stroke-width="2.4" stroke-linecap="round"/></svg></span> Campfire night (<span id="campCount">0</span>)</div>
         <div><span class="line legend-line"></span> Trail (0 → 2190.4 mi)</div>
         <button id="btnFit" class="map-btn">&#9678; Whole trail</button>
         <button id="btnTogglePhotos" class="map-btn">Hide photo dots</button>
         <button id="btnToggleCamps" class="map-btn">Hide campfires</button>
-        <button id="btnListRail" class="map-btn">&#10005; Hide check-ins</button>
+        <button id="btnListRail" class="map-btn">Hide check-ins</button>
       </div>
     </div>
   </div>
@@ -68,9 +69,9 @@
 <section id="view-gallery" class="view">
   <div class="toolbar">
     <div class="tool-group">
-      <input id="gallerySearch" type="search" placeholder="Search photo, note, check-in…">
-      <select id="galleryMonth"><option value="">All months</option></select>
-      <select id="gallerySort">
+      <input id="gallerySearch" type="search" placeholder="Search photo, note, check-in…" aria-label="Search photos, notes and check-ins">
+      <select id="galleryMonth" aria-label="Filter by month"><option value="">All months</option></select>
+      <select id="gallerySort" aria-label="Sort photos">
         <option value="dateAsc">Date &#8593;</option>
         <option value="dateDesc">Date &#8595;</option>
         <option value="mileAsc">Trail mile &#8593;</option>
@@ -90,7 +91,7 @@
   <div class="toolbar">
     <p class="hint-inline">Phone screenshots (<span id="screenCount2"></span>) — kept off the trail map. The camera roll lost its GPS data, so screenshots have no location either; sort by what they do have.</p>
     <div class="tool-group">
-      <select id="screenSort">
+      <select id="screenSort" aria-label="Sort screenshots">
         <option value="dateAsc">Date &#8593;</option>
         <option value="dateDesc">Date &#8595;</option>
         <option value="nameAsc">Name A&#8594;Z</option>
@@ -151,6 +152,6 @@
 
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

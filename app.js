@@ -328,7 +328,7 @@ function toggleRail() {
   } else {
     const hidden = document.body.classList.toggle('rail-hidden');
     const btn = $('#btnListRail');
-    if (btn) btn.textContent = hidden ? '☰ Show check-ins' : '✕ Hide check-ins';
+    if (btn) btn.textContent = hidden ? 'Show check-ins' : 'Hide check-ins';
   }
 }
 function closeRail() {
